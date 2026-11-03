@@ -45,6 +45,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import static org.assertj.core.api.BDDAssertions.then;
 import static org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT;
+import static org.springframework.cloud.context.environment.WritableEnvironmentEndpointWebExtension.VALID_KEYS_REGEX_PROPERTY;
 
 /**
  * @author Dave Syer
@@ -53,7 +54,8 @@ import static org.springframework.boot.test.context.SpringBootTest.WebEnvironmen
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = ClientApp.class,
 		properties = { "management.endpoints.web.exposure.include=*",
-				"management.endpoint.env.post.enabled=true" },
+				"management.endpoint.env.post.enabled=true",
+				VALID_KEYS_REGEX_PROPERTY + "=message" },
 		webEnvironment = RANDOM_PORT)
 public class RefreshEndpointIntegrationTests {
 
