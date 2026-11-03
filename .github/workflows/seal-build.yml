@@ -1,0 +1,105 @@
+name: seal-build
+
+# Authored for the sealed build: upstream spring-cloud-commons 2.2.x has no
+# GitHub Actions CI (it builds on CircleCI, .circleci/config.yml). This
+# workflow translates that CircleCI job: Maven 3.5.0 (.mvn/wrapper pin and
+# reference jar "Created-By"), JDK 1.8.0_282 (reference jar "Build-Jdk"),
+# `clean install` with surefire output redirected to files.
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Surefire -Dtest selector; empty runs the full suite"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      _JAVA_OPTIONS: "-Xms1024m -Xmx2048m"
+      TERM: dumb
+      MVN_FLAGS: >-
+        -B -e -V -nsu
+        -Dmaven.test.redirectTestOutputToFile=true
+        -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn
+        -Dmaven.javadoc.skip=true -Dgpg.skip=true
+        -Ddisable.checks=true -Dcheckstyle.skip=true
+      MODULES: spring-cloud-context,spring-cloud-context-integration-tests,spring-cloud-context-webflux-integration-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download AdoptOpenJDK 8u282-b08
+        run: |
+          set -euxo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/jdk8.tar.gz" \
+            https://github.com/AdoptOpenJDK/openjdk8-binaries/releases/download/jdk8u282-b08/OpenJDK8U-jdk_x64_linux_hotspot_8u282b08.tar.gz
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: jdkfile
+          jdkFile: ${{ runner.temp }}/jdk8.tar.gz
+          java-version: "8.0.282"
+          architecture: x64
+
+      - name: Install Maven 3.5.0
+        run: |
+          set -euxo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/maven.tar.gz" \
+            https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.5.0/apache-maven-3.5.0-bin.tar.gz
+          tar -xzf "$RUNNER_TEMP/maven.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/apache-maven-3.5.0/bin" >> "$GITHUB_PATH"
+
+      - name: Drop the repo.spring.io profile (dead/authenticated repos; Maven Central has everything)
+        run: |
+          cat .mvn/maven.config
+          : > .mvn/maven.config
+
+      - name: Build (no tests) and install
+        run: |
+          set -euxo pipefail
+          java -version
+          mvn $MVN_FLAGS clean install -DskipTests -pl "$MODULES" -am
+
+      - name: Test
+        run: |
+          set -euxo pipefail
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            mvn $MVN_FLAGS test -pl "$MODULES" -am \
+              -Dtest='${{ inputs.test-filter }}' -DfailIfNoTests=false \
+              -Dsurefire.failIfNoSpecifiedTests=false
+          else
+            mvn $MVN_FLAGS test -pl "$MODULES" -am
+          fi
+
+      - name: Report skipped tests with reasons
+        if: always()
+        run: |
+          set +x
+          for f in $(find . -path '*/target/surefire-reports/TEST-*.xml'); do
+            if grep -q '<skipped' "$f"; then
+              echo "== $f"
+              grep -h -B2 '<skipped' "$f" | grep -oE '<testcase [^>]*|<skipped[^>]*'
+            fi
+          done
+          echo "== @Ignore / @Disabled annotations in test sources of tested modules"
+          if grep -rqE '@(Ignore|Disabled)' spring-cloud-context*/src/test spring-cloud-test-support/src/test; then
+            grep -rnE '@(Ignore|Disabled)' spring-cloud-context*/src/test spring-cloud-test-support/src/test
+          else
+            echo "(none)"
+          fi
+
+      - name: Stage release jar
+        run: |
+          set -euxo pipefail
+          mkdir -p seal-out
+          cp spring-cloud-context/target/spring-cloud-context-2.2.8.RELEASE.jar seal-out/
+          ls -l seal-out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spring-cloud-context-jar
+          path: seal-out/spring-cloud-context-2.2.8.RELEASE.jar
+          if-no-files-found: error
